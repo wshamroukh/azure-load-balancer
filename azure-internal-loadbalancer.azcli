@@ -79,14 +79,14 @@ az network vnet subnet update -g $rg --vnet-name $spoke1_vnet_name --name $spoke
 # spoke1 vm1
 echo -e "\e[1;36mDeploying $spoke1_vnet_name-1 VM...\e[0m"
 az network nic create -g $rg -n $spoke1_vnet_name-1 -l $location1 --vnet-name $spoke1_vnet_name --subnet $spoke1_vm_subnet_name -o none
-az vm create -g $rg -n $spoke1_vnet_name-1 -l $location1 --image Ubuntu2404 --nics $spoke1_vnet_name-1 --os-disk-name $spoke1_vnet_name-1 --size $vm_size --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file --no-wait
+az vm create -g $rg -n $spoke1_vnet_name-1 -l $location1 --image Ubuntu2404 --nics $spoke1_vnet_name-1 --os-disk-name $spoke1_vnet_name-1 --size $vm_size --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file -o none
 # spoke1 vm1 details
 spoke1_vm1_ip=$(az network nic show -g $rg -n $spoke1_vnet_name-1 --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $spoke1_vnet_name-1 private ip: $spoke1_vm1_ip
 
 # spoke1 vm2
 echo -e "\e[1;36mDeploying $spoke1_vnet_name-2 VM...\e[0m"
 az network nic create -g $rg -n $spoke1_vnet_name-2 -l $location1 --vnet-name $spoke1_vnet_name --subnet $spoke1_vm_subnet_name -o none
-az vm create -g $rg -n $spoke1_vnet_name-2 -l $location1 --image Ubuntu2404 --nics $spoke1_vnet_name-2 --os-disk-name $spoke1_vnet_name-2 --size $vm_size --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file --no-wait
+az vm create -g $rg -n $spoke1_vnet_name-2 -l $location1 --image Ubuntu2404 --nics $spoke1_vnet_name-2 --os-disk-name $spoke1_vnet_name-2 --size $vm_size --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file -o none
 # spoke1 vm2 details
 spoke1_vm2_ip=$(az network nic show -g $rg -n $spoke1_vnet_name-2 --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $spoke1_vnet_name-2 private ip: $spoke1_vm2_ip
 
