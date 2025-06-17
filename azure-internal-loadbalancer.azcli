@@ -72,7 +72,7 @@ az network lb rule create -g $rg -n $spoke1_vnet_name-ilb-rule --lb-name $spoke1
 echo -e "\e[1;36mCreating Network Security Group for $spoke1_vnet_name VM Subnet...\e[0m"
 az network nsg create -g $rg -n $spoke1_vnet_name -l $location1 -o none
 # allow inbound traffic to spoke1 vm subnet
-echo -e "\e[1;36mAllowing inbound traffic to $spoke1_vnet_name VM Subnet...\e[0m"
+echo -e "\e[1;36mAllowing inbound HTTP traffic to $spoke1_vnet_name VM Subnet...\e[0m"
 az network nsg rule create -g $rg -n Allow-HTTP --nsg-name $spoke1_vnet_name --protocol tcp --destination-address-prefixes '*' --destination-port-ranges 80 --direction Inbound --source-address-prefixes '*' --source-port-ranges '*' --priority 1000 --access Allow -o none
 az network vnet subnet update -g $rg --vnet-name $spoke1_vnet_name --name $spoke1_vm_subnet_name --network-security-group $spoke1_vnet_name -o none
 
