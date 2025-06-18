@@ -1,0 +1,94 @@
+rg=azure-public-loadbalancer-az
+location1=centralindia
+
+spoke1_vnet_name=spoke1
+spoke1_vnet_address=10.11.0.0/16
+spoke1_vm_subnet_name=vm
+spoke1_vm_subnet_address=10.11.1.0/24
+
+admin_username=$(whoami)
+admin_password=Test#123#123
+myip=$(curl -s4 https://ifconfig.co/)
+
+vm_size=Standard_B2ts_v2
+
+cloudinit_file=cloudinit.txt
+cat <<EOF > $cloudinit_file
+#cloud-config
+runcmd:
+  - apt update && apt-get install -y dotnet-sdk-8.0 nginx git
+  - mv /etc/nginx/sites-available/default /etc/nginx/sites-available/default.bak
+  - cd /etc/nginx/sites-available/ && curl -O https://raw.githubusercontent.com/wshamroukh/nginx-aspdotnet/refs/heads/main/default
+  - git clone https://github.com/jelledruyts/InspectorGadget /var/www/InspectorGadget
+  - mv /var/www/InspectorGadget/WebApp /var/www/ && rm -rf /var/www/InspectorGadget
+  - cd /etc/systemd/system/ && curl -O https://raw.githubusercontent.com/wshamroukh/nginx-aspdotnet/refs/heads/main/inspectorg.service
+  - systemctl enable inspectorg && systemctl start inspectorg
+  - nginx -t && nginx -s reload
+  - systemctl restart inspectorg
+EOF
+
+# Resource Groups
+echo -e "\e[1;36mCreating $rg Resource Group...\e[0m"
+az group create -l $location1 -n $rg -o none
+
+# spoke1 vnet
+echo -e "\e[1;36mCreating $spoke1_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $spoke1_vnet_name -l $location1 --address-prefixes $spoke1_vnet_address --subnet-name $spoke1_vm_subnet_name --subnet-prefixes $spoke1_vm_subnet_address -o none
+
+# Public load balancer
+echo -e "\e[1;36mCreating Public Load Balancer $spoke1_vnet_name-lb...\e[0m"
+az network public-ip create -g $rg -n $spoke1_vnet_name-lb-pip -l $location1 --allocation-method Static --sku Standard --zone 1 2 3 -o none
+lb_pip=$(az network public-ip show -g $rg -n $spoke1_vnet_name-lb-pip --query ipAddress -o tsv | tr -d '\r') && echo $spoke1_vnet_name-lb-pip public ip: $lb_pip
+az network lb create -g $rg -n $spoke1_vnet_name-lb -l $location1 --sku Standard --backend-pool-name $spoke1_vnet_name-lb-backend-pool --public-ip-address $spoke1_vnet_name-lb-pip --frontend-ip-name $spoke1_vnet_name-lb-frontend-ip -o none
+
+# spoke1 lb health probe
+echo -e "\e[1;36mCreating Public Load Balancer $spoke1_vnet_name-lb Health Probe...\e[0m"
+az network lb probe create -g $rg -n $spoke1_vnet_name-lb-health-probe --lb-name $spoke1_vnet_name-lb --protocol tcp --port 80 --interval 5 --threshold 2 -o none
+
+# spoke1 lb rule
+echo -e "\e[1;36mCreating Public Load Balancer $spoke1_vnet_name-lb Rule...\e[0m"
+az network lb rule create -g $rg -n $spoke1_vnet_name-lb-rule --lb-name $spoke1_vnet_name-lb --protocol tcp --frontend-port 80 --backend-port 80 --frontend-ip-name $spoke1_vnet_name-lb-frontend-ip --backend-pool-name $spoke1_vnet_name-lb-backend-pool --probe-name $spoke1_vnet_name-lb-health-probe -o none
+
+# create nsg for spoke1 vm subnet
+echo -e "\e[1;36mCreating Network Security Group for $spoke1_vnet_name VM Subnet...\e[0m"
+az network nsg create -g $rg -n $spoke1_vnet_name -l $location1 -o none
+# allow inbound traffic to spoke1 vm subnet
+echo -e "\e[1;36mAllowing inbound HTTP traffic to $spoke1_vnet_name VM Subnet...\e[0m"
+az network nsg rule create -g $rg -n Allow-HTTP --nsg-name $spoke1_vnet_name --protocol tcp --destination-address-prefixes '*' --destination-port-ranges 80 --direction Inbound --source-address-prefixes '*' --source-port-ranges '*' --priority 1000 --access Allow -o none
+az network vnet subnet update -g $rg --vnet-name $spoke1_vnet_name --name $spoke1_vm_subnet_name --network-security-group $spoke1_vnet_name -o none
+
+# spoke1 vm1
+echo -e "\e[1;36mDeploying $spoke1_vnet_name-1 VM...\e[0m"
+az network nic create -g $rg -n $spoke1_vnet_name-1 -l $location1 --vnet-name $spoke1_vnet_name --subnet $spoke1_vm_subnet_name -o none
+az vm create -g $rg -n $spoke1_vnet_name-1 -l $location1 --image Ubuntu2404 --nics $spoke1_vnet_name-1 --os-disk-name $spoke1_vnet_name-1 --size $vm_size --zone 1 --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file -o none
+# spoke1 vm1 details
+spoke1_vm1_ip=$(az network nic show -g $rg -n $spoke1_vnet_name-1 --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $spoke1_vnet_name-1 private ip: $spoke1_vm1_ip
+
+# spoke1 vm2
+echo -e "\e[1;36mDeploying $spoke1_vnet_name-2 VM...\e[0m"
+az network nic create -g $rg -n $spoke1_vnet_name-2 -l $location1 --vnet-name $spoke1_vnet_name --subnet $spoke1_vm_subnet_name -o none
+az vm create -g $rg -n $spoke1_vnet_name-2 -l $location1 --image Ubuntu2404 --nics $spoke1_vnet_name-2 --os-disk-name $spoke1_vnet_name-2 --size $vm_size --zone 2 --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file -o none
+# spoke1 vm2 details
+spoke1_vm2_ip=$(az network nic show -g $rg -n $spoke1_vnet_name-2 --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $spoke1_vnet_name-2 private ip: $spoke1_vm2_ip
+
+# spoke1 vm3
+echo -e "\e[1;36mDeploying $spoke1_vnet_name-3 VM...\e[0m"
+az network nic create -g $rg -n $spoke1_vnet_name-3 -l $location1 --vnet-name $spoke1_vnet_name --subnet $spoke1_vm_subnet_name -o none
+az vm create -g $rg -n $spoke1_vnet_name-3 -l $location1 --image Ubuntu2404 --nics $spoke1_vnet_name-3 --os-disk-name $spoke1_vnet_name-3 --size $vm_size --zone 3 --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file -o none
+# spoke1 vm3 details
+spoke1_vm3_ip=$(az network nic show -g $rg -n $spoke1_vnet_name-3 --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $spoke1_vnet_name-3 private ip: $spoke1_vm3_ip
+
+# clean up
+rm $cloudinit_file
+
+# add spoke1 VMs to lb backend pool
+echo -e "\e[1;36mAdding $spoke1_vnet_name-1 and $spoke1_vnet_name-2 VMs to $spoke1_vnet_name-lb backend pool...\e[0m"
+az network nic ip-config address-pool add -g $rg --address-pool $spoke1_vnet_name-lb-backend-pool --nic $spoke1_vnet_name-1 --ip-config-name ipconfig1 --lb-name $spoke1_vnet_name-lb -o none
+az network nic ip-config address-pool add -g $rg --address-pool $spoke1_vnet_name-lb-backend-pool --nic $spoke1_vnet_name-2 --ip-config-name ipconfig1 --lb-name $spoke1_vnet_name-lb -o none
+az network nic ip-config address-pool add -g $rg --address-pool $spoke1_vnet_name-lb-backend-pool --nic $spoke1_vnet_name-3 --ip-config-name ipconfig1 --lb-name $spoke1_vnet_name-lb -o none
+
+# Test the lb
+echo -e "\e[1;36mTesting Public Load Balancer $spoke1_vnet_name-lb...\e[0m"
+echo -e "\e[1;36mYou can access the web app at http://$lb_pip\e[0m"
+# Cleanup
+# az group delete -g $rg --yes --no-wait -o none
