@@ -1,0 +1,163 @@
+rg=azure-public-loadbalancer-nva
+location=centralindia
+
+hub_vnet_name=hub
+hub_vnet_address=10.1.0.0/16
+hub_nva_subnet_name=hub-nva
+hub_nva_subnet_address=10.1.0.0/24
+vhdUri=https://wadvhds.blob.core.windows.net/vhds/opnsense.vhd
+storageType=Premium_LRS
+
+spoke1_vnet_name=spoke1
+spoke1_vnet_address=10.11.0.0/16
+spoke1_vm_subnet_name=vm
+spoke1_vm_subnet_address=10.11.1.0/24
+
+admin_username=$(whoami)
+admin_password=Test#123#123
+myip=$(curl -s4 https://ifconfig.co/)
+
+vm_size=Standard_B2ts_v2
+
+cloudinit_file=cloudinit.txt
+cat <<EOF > $cloudinit_file
+#cloud-config
+runcmd:
+  - apt update && apt-get install -y dotnet-sdk-8.0 nginx git
+  - mv /etc/nginx/sites-available/default /etc/nginx/sites-available/default.bak
+  - cd /etc/nginx/sites-available/ && curl -O https://raw.githubusercontent.com/wshamroukh/nginx-aspdotnet/refs/heads/main/default
+  - git clone https://github.com/jelledruyts/InspectorGadget /var/www/InspectorGadget
+  - mv /var/www/InspectorGadget/WebApp /var/www/ && rm -rf /var/www/InspectorGadget
+  - cd /etc/systemd/system/ && curl -O https://raw.githubusercontent.com/wshamroukh/nginx-aspdotnet/refs/heads/main/inspectorg.service
+  - systemctl enable inspectorg && systemctl start inspectorg
+  - nginx -t && nginx -s reload
+  - systemctl restart inspectorg
+EOF
+
+# Resource Groups
+echo -e "\e[1;36mCreating $rg Resource Group...\e[0m"
+az group create -l $location -n $rg -o none
+
+# hub vnet
+echo -e "\e[1;36mCreating $hub_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $hub_vnet_name -l $location --address-prefixes $hub_vnet_address --subnet-name $hub_nva_subnet_name --subnet-prefixes $hub_nva_subnet_address -o none
+
+# hub fw opnsense vm
+# create a managed disk from a vhd
+echo -e "\e[1;36mCreating $hub_nva_subnet_name managed disk from a vhd...\e[0m"
+az disk create -g $rg -n "$hub_nva_subnet_name" --sku $storageType --location $location --size-gb 30 --source $vhdUri --os-type Linux -o none
+
+#Get the resource Id of the managed disk
+diskId=$(az disk show -n $hub_nva_subnet_name -g $rg --query [id] -o tsv | tr -d '\r')
+
+echo -e "\e[1;36mCreating $hub_nva_subnet_name VM...\e[0m"
+az network public-ip create -g $rg -n "$hub_nva_subnet_name" -l $location --allocation-method Static --sku Basic -o none
+az network nic create -g $rg -n "$hub_nva_subnet_name-wan" --subnet $hub_nva_subnet_name --vnet-name $hub_vnet_name --ip-forwarding true --private-ip-address 10.1.0.250 --public-ip-address "$hub_nva_subnet_name" -o none
+az vm create -g $rg -n $hub_nva_subnet_name --nics "$hub_nva_subnet_name-wan" --size Standard_B4als_v2 --attach-os-disk $diskId --os-type linux --no-wait -o none
+# hub fw opnsense vm details:
+hub_nva_public_ip=$(az network public-ip show -g $rg -n "$hub_nva_subnet_name" --query 'ipAddress' -o tsv | tr -d '\r') && echo $hub_nva_subnet_name public ip: $hub_nva_public_ip
+hub_nva_private_ip=$(az network nic show -g $rg -n $hub_nva_subnet_name-wan --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r') && echo $hub_nva_subnet_name wan private IP: $hub_nva_private_ip
+
+# spoke1 vnet
+echo -e "\e[1;36mCreating $spoke1_vnet_name VNet...\e[0m"
+az network vnet create -g $rg -n $spoke1_vnet_name -l $location --address-prefixes $spoke1_vnet_address --subnet-name $spoke1_vm_subnet_name --subnet-prefixes $spoke1_vm_subnet_address -o none
+
+# spoke1 vm1
+echo -e "\e[1;36mDeploying $spoke1_vnet_name-1 VM...\e[0m"
+az network nic create -g $rg -n $spoke1_vnet_name-1 -l $location --vnet-name $spoke1_vnet_name --subnet $spoke1_vm_subnet_name -o none
+az vm create -g $rg -n $spoke1_vnet_name-1 -l $location --image Ubuntu2404 --nics $spoke1_vnet_name-1 --os-disk-name $spoke1_vnet_name-1 --size $vm_size --zone 1 --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file --no-wait -o none
+# spoke1 vm1 details
+spoke1_vm1_ip=$(az network nic show -g $rg -n $spoke1_vnet_name-1 --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $spoke1_vnet_name-1 private ip: $spoke1_vm1_ip
+
+# spoke1 vm2
+echo -e "\e[1;36mDeploying $spoke1_vnet_name-2 VM...\e[0m"
+az network nic create -g $rg -n $spoke1_vnet_name-2 -l $location --vnet-name $spoke1_vnet_name --subnet $spoke1_vm_subnet_name -o none
+az vm create -g $rg -n $spoke1_vnet_name-2 -l $location --image Ubuntu2404 --nics $spoke1_vnet_name-2 --os-disk-name $spoke1_vnet_name-2 --size $vm_size --zone 2 --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file --no-wait -o none
+# spoke1 vm2 details
+spoke1_vm2_ip=$(az network nic show -g $rg -n $spoke1_vnet_name-2 --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $spoke1_vnet_name-2 private ip: $spoke1_vm2_ip
+
+# spoke1 vm3
+echo -e "\e[1;36mDeploying $spoke1_vnet_name-3 VM...\e[0m"
+az network nic create -g $rg -n $spoke1_vnet_name-3 -l $location --vnet-name $spoke1_vnet_name --subnet $spoke1_vm_subnet_name -o none
+az vm create -g $rg -n $spoke1_vnet_name-3 -l $location --image Ubuntu2404 --nics $spoke1_vnet_name-3 --os-disk-name $spoke1_vnet_name-3 --size $vm_size --zone 1 --admin-username $admin_username --generate-ssh-keys --custom-data $cloudinit_file --no-wait -o none
+# spoke1 vm3 details
+spoke1_vm3_ip=$(az network nic show -g $rg -n $spoke1_vnet_name-3 --query ipConfigurations[].privateIPAddress -o tsv | tr -d '\r')  && echo $spoke1_vnet_name-3 private ip: $spoke1_vm3_ip
+
+# VNet Peering between hub and spoke1
+echo -e "\e[1;36mCreating VNet peering between $hub_vnet_name and $spoke1_vnet_name...\e[0m"
+az network vnet peering create -g $rg -n $hub_vnet_name-to-$spoke1_vnet_name-peering --remote-vnet $spoke1_vnet_name --vnet-name $hub_vnet_name --allow-vnet-access true --allow-forwarded-traffic true -o none
+az network vnet peering create -g $rg -n $spoke1_vnet_name-to-$hub_vnet_name-peering --remote-vnet $hub_vnet_name --vnet-name $spoke1_vnet_name --allow-vnet-access true --allow-forwarded-traffic true -o none
+
+# Public load balancer
+echo -e "\e[1;36mCreating Public Load Balancer $spoke1_vnet_name-lb...\e[0m"
+az network public-ip create -g $rg -n $spoke1_vnet_name-lb-pip -l $location --allocation-method Static --sku Standard --zone 1 2 3 -o none
+lb_pip=$(az network public-ip show -g $rg -n $spoke1_vnet_name-lb-pip --query ipAddress -o tsv | tr -d '\r') && echo $spoke1_vnet_name-lb-pip public ip: $lb_pip
+az network lb create -g $rg -n $spoke1_vnet_name-lb -l $location --sku Standard --backend-pool-name $spoke1_vnet_name-lb-backend-pool --public-ip-address $spoke1_vnet_name-lb-pip --frontend-ip-name $spoke1_vnet_name-lb-frontend-ip -o none
+
+# spoke1 lb health probe
+echo -e "\e[1;36mCreating Public Load Balancer $spoke1_vnet_name-lb Health Probe...\e[0m"
+az network lb probe create -g $rg -n $spoke1_vnet_name-lb-health-probe --lb-name $spoke1_vnet_name-lb --protocol tcp --port 80 --interval 5 --threshold 2 -o none
+
+# spoke1 lb rule
+echo -e "\e[1;36mCreating Public Load Balancer $spoke1_vnet_name-lb Rule...\e[0m"
+az network lb rule create -g $rg -n $spoke1_vnet_name-lb-rule --lb-name $spoke1_vnet_name-lb --protocol tcp --frontend-port 80 --backend-port 80 --frontend-ip-name $spoke1_vnet_name-lb-frontend-ip --backend-pool-name $spoke1_vnet_name-lb-backend-pool --probe-name $spoke1_vnet_name-lb-health-probe -o none
+
+# create NAT rules on NLB for SSH:
+az network lb inbound-nat-rule create -g $rg -n $spoke1_vnet_name-ssh-nat-rule --lb-name $spoke1_vnet_name-lb --protocol Tcp --frontend-port-range-start 201 --frontend-port-range-end 500 --backend-port 22 --backend-address-pool $spoke1_vnet_name-lb-backend-pool
+
+# add spoke1 VMs to lb backend pool
+echo -e "\e[1;36mAdding $spoke1_vnet_name-1 and $spoke1_vnet_name-2 VMs to $spoke1_vnet_name-lb backend pool...\e[0m"
+az network nic ip-config address-pool add -g $rg --address-pool $spoke1_vnet_name-lb-backend-pool --nic $spoke1_vnet_name-1 --ip-config-name ipconfig1 --lb-name $spoke1_vnet_name-lb -o none
+az network nic ip-config address-pool add -g $rg --address-pool $spoke1_vnet_name-lb-backend-pool --nic $spoke1_vnet_name-2 --ip-config-name ipconfig1 --lb-name $spoke1_vnet_name-lb -o none
+az network nic ip-config address-pool add -g $rg --address-pool $spoke1_vnet_name-lb-backend-pool --nic $spoke1_vnet_name-3 --ip-config-name ipconfig1 --lb-name $spoke1_vnet_name-lb -o none
+
+# create nsg for spoke1 vm subnet
+echo -e "\e[1;36mCreating Network Security Group for $spoke1_vnet_name VM Subnet...\e[0m"
+az network nsg create -g $rg -n $spoke1_vnet_name -l $location -o none
+# allow inbound traffic to spoke1 vm subnet
+echo -e "\e[1;36mAllowing inbound HTTP traffic to $spoke1_vnet_name VM Subnet...\e[0m"
+az network nsg rule create -g $rg -n Allow-HTTP --nsg-name $spoke1_vnet_name --protocol tcp --destination-address-prefixes '*' --destination-port-ranges 80 --direction Inbound --source-address-prefixes '*' --source-port-ranges '*' --priority 1000 --access Allow -o none
+az network nsg rule create -g $rg -n Allow-SSH --nsg-name $spoke1_vnet_name --protocol tcp --destination-address-prefixes '*' --destination-port-ranges 22 --direction Inbound --source-address-prefixes '*' --source-port-ranges '*' --priority 1001 --access Allow -o none
+az network vnet subnet update -g $rg --vnet-name $spoke1_vnet_name --name $spoke1_vm_subnet_name --network-security-group $spoke1_vnet_name -o none
+
+# Download config files
+opnsense_config=./nlb-opnsense.xml
+curl -o $opnsense_config https://raw.githubusercontent.com/wshamroukh/azure-load-balancer/refs/heads/main/nlb-opnsense.xml
+sed -i -e "s/4\.213\.215\.35/${lb_pip}/g" $opnsense_config
+# Copying config files to pfsense
+echo -e "\e[1;36mCopying configuration files to $hub_nva_subnet_name VM and installing opnsense firewall...\e[0m"
+scp -o StrictHostKeyChecking=no $opnsense_config root@$hub_nva_public_ip:/conf/config.xml
+echo -e "\e[1;36mRebooting $hub_nva_subnet_name VM after importing the config file...\e[0m"
+ssh -o StrictHostKeyChecking=no root@$hub_nva_public_ip "sudo reboot"
+
+# hub fw opnsense nsg
+echo -e "\e[1;36mCreating $hub_nva_subnet_name-nsg NSG...\e[0m"
+myip=$(curl -s4 https://ifconfig.co/)
+az network nsg create -g $rg -n $hub_nva_subnet_name-nsg -l $location -o none
+az network nsg rule create -g $rg -n AllowSSH --nsg-name $hub_nva_subnet_name-nsg --priority 1000 --access Allow --description AllowSSH --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 22 --source-address-prefixes $myip --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowHTTP --nsg-name $hub_nva_subnet_name-nsg --priority 1010 --access Allow --description AllowHTTP --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 80 --source-address-prefixes $myip --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowHTTPS --nsg-name $hub_nva_subnet_name-nsg --priority 1020 --access Allow --description AllowHTTPS --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 443 --source-address-prefixes $myip --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowNAT-HTTP --nsg-name $hub_nva_subnet_name-nsg --priority 1030 --access Allow --description AllowHTTPS --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 8080 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network nsg rule create -g $rg -n AllowNAT-SSH --nsg-name $hub_nva_subnet_name-nsg --priority 1040 --access Allow --description AllowSSH --protocol Tcp --direction Inbound --destination-address-prefixes '*' --destination-port-ranges 301-303 --source-address-prefixes '*' --source-port-ranges '*' -o none
+az network vnet subnet update -g $rg -n $hub_nva_subnet_name --vnet-name $hub_vnet_name --nsg $hub_nva_subnet_name-nsg -o none
+
+
+# Spoke VMs UDR
+echo -e "\e[1;36mCreating $spoke1_vm_subnet_name UDR to send the traffic through NVA....\e[0m"
+az network route-table create -g $rg -n $spoke1_vm_subnet_name -l $location --disable-bgp-route-propagation false -o none
+az network route-table route create -g $rg -n default --address-prefix "0.0.0.0/0" --next-hop-type VirtualAppliance --route-table-name $spoke1_vm_subnet_name --next-hop-ip-address $hub_nva_private_ip -o none
+az network route-table route create -g $rg -n fw-host-route --address-prefix $hub_nva_public_ip/32 --next-hop-type Internet --route-table-name $spoke1_vm_subnet_name -o none
+az network vnet subnet update -g $rg -n $spoke1_vm_subnet_name --vnet-name $spoke1_vnet_name --route-table $spoke1_vm_subnet_name -o none
+
+# clean up cloudinit file
+rm $cloudinit_file $opnsense_config
+
+# Test the NVA
+echo -e "\e[1;36mTesting Public Load Balancer $spoke1_vnet_name-lb...\e[0m"
+echo -e "\e[1;36mYou can access the web app at http://$hub_nva_public_ip\e[0m"
+echo -e "\e[1;36mssh $admin_username@$hub_nva_public_ip -p 301 -o StrictHostKeyChecking=no\e[0m"
+echo -e "\e[1;36mssh $admin_username@$hub_nva_public_ip -p 302 -o StrictHostKeyChecking=no\e[0m"
+echo -e "\e[1;36mssh $admin_username@$hub_nva_public_ip -p 303 -o StrictHostKeyChecking=no\e[0m"
+
+# Cleanup
+# az group delete -g $rg --yes --no-wait -o none
