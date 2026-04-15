@@ -103,7 +103,7 @@ echo -e "\e[1;36mCreating Public Load Balancer $spoke1_vnet_name-lb Rule...\e[0m
 az network lb rule create -g $rg -n $spoke1_vnet_name-lb-rule --lb-name $spoke1_vnet_name-lb --protocol tcp --frontend-port 80 --backend-port 80 --frontend-ip-name $spoke1_vnet_name-lb-frontend-ip --backend-pool-name $spoke1_vnet_name-lb-backend-pool --probe-name $spoke1_vnet_name-lb-health-probe -o none
 
 # create NAT rules on NLB for SSH:
-az network lb inbound-nat-rule create -g $rg -n $spoke1_vnet_name-ssh-nat-rule --lb-name $spoke1_vnet_name-lb --protocol Tcp --frontend-port-range-start 201 --frontend-port-range-end 500 --backend-port 22 --backend-address-pool $spoke1_vnet_name-lb-backend-pool
+az network lb inbound-nat-rule create -g $rg -n $spoke1_vnet_name-ssh-nat-rule --lb-name $spoke1_vnet_name-lb --protocol Tcp --frontend-port-range-start 301 --frontend-port-range-end 500 --backend-port 22 --backend-address-pool $spoke1_vnet_name-lb-backend-pool
 
 # add spoke1 VMs to lb backend pool
 echo -e "\e[1;36mAdding $spoke1_vnet_name-1 and $spoke1_vnet_name-2 VMs to $spoke1_vnet_name-lb backend pool...\e[0m"
@@ -121,7 +121,7 @@ az network nsg rule create -g $rg -n Allow-SSH --nsg-name $spoke1_vnet_name --pr
 az network vnet subnet update -g $rg --vnet-name $spoke1_vnet_name --name $spoke1_vm_subnet_name --network-security-group $spoke1_vnet_name -o none
 
 # Download config files
-opnsense_config=./nlb-opnsense.xml
+opnsense_config=~/nlb-opnsense.xml
 curl -o $opnsense_config https://raw.githubusercontent.com/wshamroukh/azure-load-balancer/refs/heads/main/nlb-opnsense.xml
 sed -i -e "s/4\.213\.215\.35/${lb_pip}/g" $opnsense_config
 # Copying config files to pfsense
@@ -154,7 +154,7 @@ rm $cloudinit_file $opnsense_config
 
 # Test the NVA
 echo -e "\e[1;36mTesting Public Load Balancer $spoke1_vnet_name-lb...\e[0m"
-echo -e "\e[1;36mYou can access the web app at http://$hub_nva_public_ip\e[0m"
+echo -e "\e[1;36mYou can access the web app at http://$hub_nva_public_ip:8080\e[0m"
 echo -e "\e[1;36mssh $admin_username@$hub_nva_public_ip -p 301 -o StrictHostKeyChecking=no\e[0m"
 echo -e "\e[1;36mssh $admin_username@$hub_nva_public_ip -p 302 -o StrictHostKeyChecking=no\e[0m"
 echo -e "\e[1;36mssh $admin_username@$hub_nva_public_ip -p 303 -o StrictHostKeyChecking=no\e[0m"
